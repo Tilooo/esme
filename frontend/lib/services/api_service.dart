@@ -5,7 +5,7 @@ import '../models/category.dart';
 import '../models/point_of_interest.dart';
 
 class ApiService {
-  final String baseUrl = 'http://localhost:8000/api'; // Change to your Django API URL
+  final String baseUrl = 'http://localhost:8000/api';
 
   Future<List<PointOfInterest>> getPointsOfInterest() async {
     final response = await http.get(Uri.parse('$baseUrl/points/'));
