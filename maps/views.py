@@ -5,6 +5,7 @@ from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from math import cos, radians, sqrt
 from rest_framework import status
+from django.http import JsonResponse
 
 class LocationViewSet(viewsets.ModelViewSet):
     queryset = Location.objects.all()
@@ -60,3 +61,22 @@ def nearby_points(request):
         return Response(nearby)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+from django.http import JsonResponse
+
+def api_root(request):
+    return JsonResponse({
+        'message': 'Welcome to the ESME API',
+        'endpoints': {
+            'test': '/api/test/',
+            'points': '/api/points/',
+            'categories': '/api/categories/',
+            'locations': '/api/locations/',
+        }
+    })
+
+def test_api(request):
+    return JsonResponse({"status": "ok", "message": "API is working!"})
+
+# Make sure you have your other view functions defined here
