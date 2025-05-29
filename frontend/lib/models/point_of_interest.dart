@@ -30,10 +30,15 @@ class PointOfInterest {
       description: json['description'],
       latitude: json['latitude'],
       longitude: json['longitude'],
-      category: json['category'] != null ? Category.fromJson(json['category']) : null,
+      // Handle both cases: when category is an ID (int) or a full object (Map)
+      category: json['category'] != null ? 
+        (json['category'] is Map<String, dynamic> ? 
+          Category.fromJson(json['category']) : 
+          Category(id: json['category'], name: json['category_name'] ?? 'Unknown', icon: null)) : 
+        null,
       address: json['address'],
       createdAt: DateTime.parse(json['created_at']),
-      createdById: json['created_by'],
+      createdById: json['created_by'] is Map ? json['created_by']['id'] : json['created_by'],
     );
   }
 }

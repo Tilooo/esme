@@ -41,9 +41,8 @@ def nearby_points(request):
         radius = float(request.query_params.get('radius', 5))  # km
         
         # Simple distance calculation (not accurate for large distances)
-        # For production, use GeoDjango with PostGIS
         points = PointOfInterest.objects.all()
-        nearby = []
+        nearby_points = []
         
         for point in points:
             # Simple approximation (1 degree lat ≈ 111 km)
@@ -53,12 +52,13 @@ def nearby_points(request):
             distance = sqrt(lat_diff**2 + lng_diff**2)
             
             if distance <= radius:
-                nearby.append({
-                    'point': PointOfInterestSerializer(point).data,
-                    'distance': distance
-                })
+                # Just return the point data directly, not nested
+                serialized_point = PointOfInterestSerializer(point).data
+                # Optionally add distance as a field
+                serialized_point['distance'] = distance
+                nearby_points.append(serialized_point)
         
-        return Response(nearby)
+        return Response(nearby_points)
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -79,4 +79,19 @@ def api_root(request):
 def test_api(request):
     return JsonResponse({"status": "ok", "message": "API is working!"})
 
-# Make sure you have your other view functions defined here
+
+@api_view(['GET'])
+def search_points(request):
+    """Search for points of interest by name or description"""
+    query = request.query_params.get('q', '')
+    if not query:
+        return Response([])
+    
+    # Search in name and description fields
+    points = PointOfInterest.objects.filter(
+        models.Q(name__icontains=query) | 
+        models.Q(description__icontains=query)
+    )
+    
+    serializer = PointOfInterestSerializer(points, many=True)
+    return Response(serializer.data)

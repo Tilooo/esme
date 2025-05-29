@@ -7,7 +7,7 @@ import '../models/category.dart' as app_models;
 import '../models/point_of_interest.dart';
 
 class ApiService {
-  // Get the appropriate base URL based on platform and environment
+  // Gets the appropriate base URL based on platform and environment
   String get baseUrl {
     // For web
     if (kIsWeb) return 'http://localhost:8000/api';
@@ -40,12 +40,12 @@ class ApiService {
     }
   }
 
-  Future<List<app_models.Category>> getCategories() async { // Use the alias here
+  Future<List<app_models.Category>> getCategories() async { // the alias
     final response = await http.get(Uri.parse('$baseUrl/categories/'));
     
     if (response.statusCode == 200) {
       List<dynamic> data = json.decode(response.body);
-      return data.map((json) => app_models.Category.fromJson(json)).toList(); // Use the alias here
+      return data.map((json) => app_models.Category.fromJson(json)).toList(); // The alias
     } else {
       throw Exception('Failed to load categories: ${response.statusCode}');
     }
@@ -62,17 +62,69 @@ class ApiService {
     }
   }
   
-  // Added method to get nearby points using the backend API
-  Future<List<Map<String, dynamic>>> getNearbyPoints(double lat, double lng, double radius) async {
-    final response = await http.get(
-      Uri.parse('$baseUrl/nearby/?lat=$lat&lng=$lng&radius=$radius'),
-    );
-    
-    if (response.statusCode == 200) {
-      List<dynamic> data = json.decode(response.body);
-      return List<Map<String, dynamic>>.from(data);
-    } else {
-      throw Exception('Failed to load nearby points: ${response.statusCode}');
+  // Method to get nearby points using the backend API
+  Future<List<PointOfInterest>> getNearbyPoints(double lat, double lng, double radius) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/nearby/?lat=$lat&lng=$lng&radius=$radius'),
+      );
+      
+      if (response.statusCode == 200) {
+        List<dynamic> data = json.decode(response.body);
+        
+        // F to see the raw response
+        print('Raw API response: ${response.body}');
+        
+        // Handles empty response gracefully
+        if (data.isEmpty) {
+          print('No nearby points found within ${radius}km');
+          return [];
+        }
+        
+        List<PointOfInterest> points = [];
+        
+        // Processes each item with better type checking
+        for (var i = 0; i < data.length; i++) {
+          try {
+            var pointData = data[i];
+            print('Processing item $i: $pointData (type: ${pointData.runtimeType})');
+            
+            if (pointData is Map<String, dynamic>) {
+              points.add(PointOfInterest.fromJson(pointData));
+            } else if (pointData is int) {
+              print('Skipping integer value: $pointData');
+            } else {
+              print('Unexpected data type: ${pointData.runtimeType}');
+            }
+          } catch (e) {
+            print('Error processing point at index $i: $e');
+          }
+        }
+        
+        return points;
+      } else {
+        throw Exception('Failed to load nearby points: ${response.statusCode}');
+      }
+    } catch (e) {
+      throw Exception('Failed to fetch nearby points: $e');
+    }
+  }
+
+  // Searches functionality
+  Future<List<PointOfInterest>> searchPoints(String query) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/points/search/?q=$query'),
+      );
+      
+      if (response.statusCode == 200) {
+        List<dynamic> data = json.decode(response.body);
+        return data.map((json) => PointOfInterest.fromJson(json)).toList();
+      } else {
+        throw Exception('Server error: ${response.statusCode}');
+      }
+    } catch (e) {
+      throw Exception('Failed to search: $e');
     }
   }
 }
