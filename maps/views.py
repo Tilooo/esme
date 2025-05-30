@@ -1,4 +1,5 @@
 from rest_framework import viewsets, permissions
+from django.db.models import Q
 from .models import Location, Category, PointOfInterest
 from .serializers import LocationSerializer, CategorySerializer, PointOfInterestSerializer
 from rest_framework.decorators import api_view
@@ -32,8 +33,8 @@ class PointOfInterestViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(category__id=category)
         return queryset
 
-@api_view(['GET'])
-def nearby_points(request):
+@api_view(['GET']) 
+def nearby_points(request): 
     """Get points of interest near a location"""
     try:
         lat = float(request.query_params.get('lat', 0))
@@ -62,8 +63,6 @@ def nearby_points(request):
     except Exception as e:
         return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
-
-from django.http import JsonResponse
 
 def api_root(request):
     return JsonResponse({
@@ -95,3 +94,31 @@ def search_points(request):
     
     serializer = PointOfInterestSerializer(points, many=True)
     return Response(serializer.data)
+
+
+@api_view(['GET'])
+def map_styles(request):
+    """Return available map styles"""
+    styles = [
+        {
+            "id": "streets",
+            "name": "Streets",
+            "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        },
+        {
+            "id": "dark",
+            "name": "Dark Mode",
+            "url": "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}.png"
+        },
+        {
+            "id": "watercolor",
+            "name": "Watercolor",
+            "url": "https://stamen-tiles.a.ssl.fastly.net/watercolor/{z}/{x}/{y}.jpg"
+        },
+        {
+            "id": "satellite",
+            "name": "Satellite",
+            "url": "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+        }
+    ]
+    return Response(styles)

@@ -127,4 +127,31 @@ class ApiService {
       throw Exception('Failed to search: $e');
     }
   }
+
+  Future<List<Map<String, dynamic>>> getMapStyles() async {
+    try {
+      final response = await http.get(Uri.parse('$baseUrl/map-styles/'));
+      
+      if (response.statusCode == 200) {
+        List<dynamic> data = json.decode(response.body);
+        return List<Map<String, dynamic>>.from(data);
+      } else {
+        throw Exception('Failed to load map styles: ${response.statusCode}');
+      }
+    } catch (e) {
+      // Fallback to default styles if API fails
+      return [
+        {
+          "id": "streets",
+          "name": "Streets",
+          "url": "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        },
+        {
+          "id": "dark",
+          "name": "Dark Mode",
+          "url": "https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}.png"
+        }
+      ];
+    }
+  }
 }

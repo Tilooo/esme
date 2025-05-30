@@ -18,7 +18,7 @@ class MyApp extends StatelessWidget {
           brightness: Brightness.light,
         ),
         useMaterial3: true,
-        // Add rounded corners to cards and buttons
+        // Added rounded corners to cards and buttons
         cardTheme: CardTheme(
           elevation: 2,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
@@ -48,7 +48,7 @@ class MyApp extends StatelessWidget {
           ),
         ),
       ),
-      themeMode: ThemeMode.system, // Respect system theme
+      themeMode: ThemeMode.system, // Respects system theme
       home: const MapScreen(),
     );
   }

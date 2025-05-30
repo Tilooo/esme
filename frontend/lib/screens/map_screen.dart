@@ -25,24 +25,29 @@ class _MapScreenState extends State<MapScreen> {
   final MapController _mapController = MapController();
   bool _isMapInitialized = false;
 
+
   // Map styles
   final List<Map<String, String>> _mapStyles = [
     {
+      'id': 'streets',
       'name': 'OpenStreetMap',
       'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
     },
     {
+      'id': 'topo',
       'name': 'OpenTopoMap',
       'url': 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
     },
     {
+      'id': 'cycle',
       'name': 'CyclOSM',
       'url': 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
     },
   ];
   int _currentMapStyleIndex = 0;
+  String _currentMapStyleId = 'streets';
 
-  // State variables for new features
+  // States variables for new features
   List<Category> _categories = [];
   Set<int> _selectedCategoryIds = {};
   double _searchRadius = 1000; // Default radius in meters
@@ -51,7 +56,7 @@ class _MapScreenState extends State<MapScreen> {
   void initState() {
     super.initState();
     _loadData();
-    _loadCategories(); // Load categories for filter
+    _loadCategories(); // Loads categories for filter
 
     // Gets location after the widget is built
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -395,6 +400,11 @@ class _MapScreenState extends State<MapScreen> {
         scrolledUnderElevation: 0,
         actions: [
           IconButton(
+            icon: const Icon(Icons.explore),
+            onPressed: _showWhatsAroundMe,
+            tooltip: "What's Around Me",
+          ),
+          IconButton(
             icon: const Icon(Icons.refresh),
             onPressed: _loadData,
             tooltip: 'Refresh',
@@ -619,6 +629,52 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                     ),
                   ),
+                  // Hero image placeholder
+                  Container(
+                    height: 150,
+                    margin: const EdgeInsets.only(bottom: 20),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.primaryContainer,
+                      borderRadius: BorderRadius.circular(12),
+                      image: const DecorationImage(
+                        image: NetworkImage('https://via.placeholder.com/400x200?text=No+Image'),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                    child: Stack(
+                      children: [
+                        Positioned(
+                          top: 12,
+                          right: 12,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primary,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Icon(
+                                  Icons.star,
+                                  color: Theme.of(context).colorScheme.onPrimary,
+                                  size: 16,
+                                ),
+                                const SizedBox(width: 4),
+                                Text(
+                                  '4.5', // Placeholder rating
+                                  style: TextStyle(
+                                    color: Theme.of(context).colorScheme.onPrimary,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                   // Title and category
                   Row(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -663,42 +719,67 @@ class _MapScreenState extends State<MapScreen> {
                   ),
                   const Divider(height: 32),
                   // Description
-                  if (point.description != null && point.description!.isNotEmpty) ...[
-                    Text(
-                      'Description',
-                      style: Theme.of(context).textTheme.titleMedium,
-                    ),
-                    const SizedBox(height: 8),
+                  if (point.description != null && point.description!.isNotEmpty) ...[                    
                     Text(
                       point.description!,
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                     const SizedBox(height: 16),
                   ],
-                  // Address
-                  if (point.address != null && point.address!.isNotEmpty) ...[
-                    Text(
-                      'Address',
-                      style: Theme.of(context).textTheme.titleMedium,
+                  // Address with map preview
+                  if (point.address != null && point.address!.isNotEmpty) ...[                    
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: Icon(
+                        Icons.location_on,
+                        color: Theme.of(context).colorScheme.primary,
+                      ),
+                      title: Text('Address'),
+                      subtitle: Text(point.address!),
                     ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        Icon(
-                          Icons.location_on,
-                          size: 18,
-                          color: Theme.of(context).colorScheme.primary,
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            point.address!,
-                            style: Theme.of(context).textTheme.bodyMedium,
+                    // Mini map preview
+                    Container(
+                      height: 120,
+                      margin: const EdgeInsets.symmetric(vertical: 16),
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Colors.grey.withOpacity(0.3)),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(12),
+                        child: FlutterMap(
+                          options: MapOptions(
+                            initialCenter: LatLng(point.latitude, point.longitude),
+                            initialZoom: 14.0,
+                            interactionOptions: const InteractionOptions(
+                              flags: InteractiveFlag.none,
+                            ),
                           ),
+                          children: [
+                            TileLayer(
+                              urlTemplate: _mapStyles.firstWhere(
+                                (style) => style['id'] == _currentMapStyleId,
+                                orElse: () => {'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'},
+                              )['url'],
+                            ),
+                            MarkerLayer(
+                              markers: [
+                                Marker(
+                                  width: 40.0,
+                                  height: 40.0,
+                                  point: LatLng(point.latitude, point.longitude),
+                                  child: Icon(
+                                    _getCategoryIcon(point.category),
+                                    color: Theme.of(context).colorScheme.primary,
+                                    size: 30.0,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
-                    const SizedBox(height: 16),
                   ],
                   // Action buttons
                   Row(
@@ -711,7 +792,10 @@ class _MapScreenState extends State<MapScreen> {
                         onTap: () {
                           // Opens maps app with directions
                           final url = 'https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}';
-                          // Implements url launcher
+                          // Need to implement url_launcher package
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Opening directions (URL launcher not implemented)'))
+                          );
                         },
                       ),
                       _actionButton(
@@ -719,7 +803,10 @@ class _MapScreenState extends State<MapScreen> {
                         icon: Icons.share,
                         label: 'Share',
                         onTap: () {
-                          // Shares location
+                          // Share location
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Sharing feature coming soon!'))
+                          );
                         },
                       ),
                       _actionButton(
@@ -727,7 +814,10 @@ class _MapScreenState extends State<MapScreen> {
                         icon: Icons.star_border,
                         label: 'Save',
                         onTap: () {
-                          // Saves to favorites
+                          // Save to favorites
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(content: Text('Saved to favorites (feature coming soon)'))
+                          );
                         },
                       ),
                     ],
@@ -736,6 +826,82 @@ class _MapScreenState extends State<MapScreen> {
               ),
             );
           },
+        );
+      },
+    );
+  }
+
+  void _showWhatsAroundMe() {
+    if (_categories.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Loading categories...'))
+      );
+      return;
+    }
+    
+    showModalBottomSheet(
+      context: context,
+      builder: (context) {
+        return Container(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                "What's Around Me?",
+                style: Theme.of(context).textTheme.titleLarge,
+              ),
+              const SizedBox(height: 16),
+              Text(
+                "Discover places near your current location",
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
+              const SizedBox(height: 16),
+              Wrap(
+                spacing: 12,
+                runSpacing: 12,
+                children: _categories.map((category) {
+                  return InkWell(
+                    onTap: () {
+                      Navigator.pop(context);
+                      setState(() {
+                        _selectedCategoryIds.clear();
+                        _selectedCategoryIds.add(category.id);
+                      });
+                      _loadNearbyPoints();
+                    },
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      width: 80,
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: Theme.of(context).colorScheme.surfaceVariant,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(
+                            _getCategoryIcon(category),
+                            color: Theme.of(context).colorScheme.primary,
+                            size: 32,
+                          ),
+                          const SizedBox(height: 8),
+                          Text(
+                            category.name,
+                            style: Theme.of(context).textTheme.bodySmall,
+                            textAlign: TextAlign.center,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }).toList(),
+              ),
+            ],
+          ),
         );
       },
     );
