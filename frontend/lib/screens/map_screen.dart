@@ -2,12 +2,20 @@ import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
+import 'dart:math';
+
 import '../models/point_of_interest.dart';
 import '../models/category.dart';
 import '../services/api_service.dart';
 import 'search_screen.dart';
+
+class MapStyle {
+  final String name;
+  final String url;
+  final String attribution;
+  const MapStyle({required this.name, required this.url, required this.attribution});
+}
 
 class MapScreen extends StatefulWidget {
   const MapScreen({Key? key}) : super(key: key);
@@ -21,178 +29,295 @@ class _MapScreenState extends State<MapScreen> {
   List<PointOfInterest> _points = [];
   bool _isLoading = true;
   String? _errorMessage;
-  LatLng _currentPosition = LatLng(51.509364, -0.128928); // Default to London
+  LatLng _currentPosition = LatLng(51.509364, -0.128928);
   final MapController _mapController = MapController();
-  bool _isMapInitialized = false;
 
-
-  // Map styles
-  final List<Map<String, String>> _mapStyles = [
-    {
-      'id': 'streets',
-      'name': 'OpenStreetMap',
-      'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-    },
-    {
-      'id': 'topo',
-      'name': 'OpenTopoMap',
-      'url': 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png',
-    },
-    {
-      'id': 'cycle',
-      'name': 'CyclOSM',
-      'url': 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png',
-    },
+  final List<MapStyle> _mapStyles = [
+    const MapStyle(name: 'OpenStreetMap', url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png', attribution: '© OpenStreetMap contributors'),
+    const MapStyle(name: 'OpenTopoMap', url: 'https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', attribution: 'Map data: © OpenStreetMap, SRTM | Map style: © OpenTopoMap'),
+    const MapStyle(name: 'CyclOSM', url: 'https://{s}.tile-cyclosm.openstreetmap.fr/cyclosm/{z}/{x}/{y}.png', attribution: '© CyclOSM & OpenStreetMap contributors'),
   ];
   int _currentMapStyleIndex = 0;
-  String _currentMapStyleId = 'streets';
 
-  // States variables for new features
   List<Category> _categories = [];
   Set<int> _selectedCategoryIds = {};
-  double _searchRadius = 1000; // Default radius in meters
+  double _searchRadius = 1000;
 
   @override
   void initState() {
     super.initState();
-    _loadData();
-    _loadCategories(); // Loads categories for filter
+    _initializeMap();
+  }
 
-    // Gets location after the widget is built
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _getCurrentLocation();
-    });
+  Future<void> _initializeMap() async {
+    await _getCurrentLocation();
+    await _loadNearbyPoints();
+    await _loadCategories();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final currentMapStyle = _mapStyles[_currentMapStyleIndex];
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('ESMĖ Maps'),
+        elevation: 0,
+        backgroundColor: Colors.transparent,
+        actions: [
+          IconButton(icon: const Icon(Icons.search), onPressed: () async { final result = await Navigator.push(context, MaterialPageRoute(builder: (context) => const SearchScreen())); if (result != null && result is PointOfInterest) { _mapController.move(LatLng(result.latitude, result.longitude), 15.0); } }, tooltip: 'Search'),
+          IconButton(icon: const Icon(Icons.filter_list), onPressed: _showFilterDialog, tooltip: 'Filter'),
+          PopupMenuButton<String>(
+            onSelected: (value) {
+              if (value == 'style') _changeMapStyle();
+              if (value == 'radius') _showRadiusSelector();
+              if (value == 'refresh') _loadNearbyPoints();
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(value: 'radius', child: Text('Set Search Radius')),
+              const PopupMenuItem(value: 'style', child: Text('Change Map Style')),
+              const PopupMenuItem(value: 'refresh', child: Text('Refresh Points')),
+            ],
+          ),
+        ],
+      ),
+      extendBodyBehindAppBar: true,
+      body: Stack(
+        children: [
+          FlutterMap(
+            mapController: _mapController,
+            options: MapOptions(
+              initialCenter: _currentPosition,
+              initialZoom: 13.0,
+              minZoom: 5.0,
+              maxZoom: 18.0,
+            ),
+            children: [
+              TileLayer(
+                urlTemplate: currentMapStyle.url,
+                subdomains: const ['a', 'b', 'c'],
+                userAgentPackageName: 'com.example.esme',
+              ),
+              CircleLayer(
+                circles: [
+                  CircleMarker(
+                    point: _currentPosition, radius: _searchRadius, useRadiusInMeter: true,
+                    color: Colors.blue.withOpacity(0.1), borderColor: Colors.blue.withOpacity(0.5), borderStrokeWidth: 2,
+                  ),
+                ],
+              ),
+              MarkerLayer(
+                markers: [
+                  ..._points.map((point) => Marker(
+                    width: 40.0, height: 40.0,
+                    point: LatLng(point.latitude, point.longitude),
+                    child: GestureDetector(
+                      onTap: () => _showPointDetails(point),
+                      child: Container(
+                        decoration: BoxDecoration(color: colorScheme.primary, shape: BoxShape.circle, boxShadow: [ BoxShadow(color: Colors.black.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 2))]),
+                        child: Icon(_getCategoryIcon(point.category), color: colorScheme.onPrimary, size: 20),
+                      ),
+                    ),
+                  )),
+                  Marker(width: 40.0, height: 40.0, point: _currentPosition, child: const Icon(Icons.my_location, color: Colors.blueAccent, size: 35.0)),
+                ],
+              ),
+            ],
+          ),
+          Positioned(
+            top: 100.0,
+            right: 16.0,
+            child: Column(
+              children: [
+                FloatingActionButton.small(
+                  heroTag: 'zoomInButton',
+                  child: const Icon(Icons.add),
+                  onPressed: () {
+                    final currentZoom = _mapController.camera.zoom;
+                    _mapController.move(_mapController.camera.center, currentZoom + 1);
+                  },
+                ),
+                const SizedBox(height: 8),
+                FloatingActionButton.small(
+                  heroTag: 'zoomOutButton',
+                  child: const Icon(Icons.remove),
+                  onPressed: () {
+                    final currentZoom = _mapController.camera.zoom;
+                    _mapController.move(_mapController.camera.center, currentZoom - 1);
+                  },
+                ),
+              ],
+            ),
+          ),
+          if (_isLoading) Container(color: Colors.black.withOpacity(0.5), child: const Center(child: CircularProgressIndicator())),
+          if (_errorMessage != null) Positioned(bottom: 80, left: 20, right: 20, child: Card(color: Colors.redAccent, child: Padding(padding: const EdgeInsets.all(12.0), child: Text(_errorMessage!, style: const TextStyle(color: Colors.white), textAlign: TextAlign.center)))),
+        ],
+      ),
+      floatingActionButton: FloatingActionButton(onPressed: _getCurrentLocation, child: const Icon(Icons.my_location)),
+    );
   }
 
   void _changeMapStyle() {
     setState(() {
       _currentMapStyleIndex = (_currentMapStyleIndex + 1) % _mapStyles.length;
     });
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('Map style: ${_mapStyles[_currentMapStyleIndex]['name']}')),
-    );
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Map style: ${_mapStyles[_currentMapStyleIndex].name}')));
   }
 
-  Future<void> _loadData() async {
-    try {
-      final points = await _apiService.getPointsOfInterest();
-      setState(() {
-        _points = points;
-        _isLoading = false;
-        _errorMessage = null;
-      });
-    } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Error loading data: $e';
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading data: $e')),
-      );
-    }
-  }
-
-  // Method to load categories
   Future<void> _loadCategories() async {
     try {
       final categories = await _apiService.getCategories();
-      setState(() {
-        _categories = categories;
-      });
+      if (!mounted) return;
+      setState(() { _categories = categories; });
     } catch (e) {
       print('Error loading categories: $e');
     }
   }
 
   Future<void> _loadNearbyPoints() async {
-    setState(() {
-      _isLoading = true;
-      _errorMessage = null;
-    });
-
+    setState(() { _isLoading = true; _errorMessage = null; });
     try {
-      final points = await _apiService.getNearbyPoints(
-        _currentPosition.latitude,
-        _currentPosition.longitude,
-        _searchRadius,
-      );
-
-      // Category filters if any are selected
-      final filteredPoints = _selectedCategoryIds.isEmpty
-          ? points
-          : points.where((point) =>
-              point.category != null &&
-              _selectedCategoryIds.contains(point.category!.id)
-            ).toList();
-
+      final points = await _apiService.getNearbyPoints(_currentPosition.latitude, _currentPosition.longitude, _searchRadius);
+      final filteredPoints = _selectedCategoryIds.isEmpty ? points : points.where((p) => p.category != null && _selectedCategoryIds.contains(p.category!.id)).toList();
+      if (!mounted) return;
       setState(() {
         _points = filteredPoints;
         _isLoading = false;
-        if (_points.isEmpty) {
-          _errorMessage = 'No nearby points found';
-        } else {
-          _errorMessage = null;
-        }
+        _errorMessage = _points.isEmpty ? 'No nearby points found.' : null;
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _isLoading = false;
         _errorMessage = 'Error loading nearby points: $e';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error loading nearby points: $e')),
-      );
     }
   }
 
   Future<void> _getCurrentLocation() async {
-    setState(() {
-      _isLoading = true;
-    });
-
+    setState(() { _isLoading = true; });
     try {
-      // Checks location permissions
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          throw Exception('Location permissions are denied');
-        }
+        if (permission == LocationPermission.denied) throw Exception('Location permissions are denied');
       }
+      if (permission == LocationPermission.deniedForever) throw Exception('Location permissions are permanently denied.');
 
-      if (permission == LocationPermission.deniedForever) {
-        throw Exception('Location permissions are permanently denied');
-      }
-
-      // Gets current position
-      final position = await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high,
-      );
-
+      final position = await Geolocator.getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+      if (!mounted) return;
       setState(() {
         _currentPosition = LatLng(position.latitude, position.longitude);
-        _isLoading = false;
       });
-
-      _moveMapToCurrentPosition();
+      _mapController.move(_currentPosition, 14.0);
     } catch (e) {
-      setState(() {
-        _isLoading = false;
-        _errorMessage = 'Error getting location: $e';
-      });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Error getting location: $e')),
-      );
+      if (!mounted) return;
+      setState(() { _errorMessage = 'Error getting location: $e'; });
+    } finally {
+      if (!mounted) return;
+      setState(() { _isLoading = false; });
     }
   }
 
-  void _moveMapToCurrentPosition() {
-    if (_isMapInitialized) {
-      _mapController.move(_currentPosition, 13.0);
+  IconData _getCategoryIcon(Category? category) {
+    if (category == null) return Icons.location_on;
+    switch(category.name.toLowerCase()) {
+      case 'restaurant': case 'food': return Icons.restaurant;
+      case 'cafe': case 'coffee': return Icons.local_cafe;
+      case 'shopping': case 'store': return Icons.shopping_bag;
+      case 'hotel': case 'lodging': return Icons.hotel;
+      case 'attraction': case 'tourism': return Icons.attractions;
+      case 'park': case 'nature': return Icons.park;
+      case 'transport': case 'station': return Icons.directions_transit;
+      default: return Icons.place;
     }
   }
 
-  // Method to show filter dialog
+  void _showPointDetails(PointOfInterest point) {
+    showModalBottomSheet(
+      context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+      builder: (context) {
+        final colorScheme = Theme.of(context).colorScheme;
+        final textTheme = Theme.of(context).textTheme;
+        return DraggableScrollableSheet(
+          initialChildSize: 0.5, minChildSize: 0.2, maxChildSize: 0.85,
+          builder: (_, controller) {
+            return Container(
+              decoration: BoxDecoration(color: colorScheme.surface, borderRadius: const BorderRadius.vertical(top: Radius.circular(24))),
+              child: ListView(
+                controller: controller, padding: const EdgeInsets.all(24),
+                children: [
+                  Center(child: Container(width: 40, height: 5, margin: const EdgeInsets.only(bottom: 16), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10)))),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(_getCategoryIcon(point.category), color: colorScheme.primary, size: 40),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(point.name, style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+                            if (point.category != null) Padding(padding: const EdgeInsets.only(top: 4.0), child: Text(point.category!.name, style: textTheme.bodyLarge?.copyWith(color: colorScheme.secondary))),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 40),
+                  if (point.description != null && point.description!.isNotEmpty) ...[
+                    Text("About", style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                    const SizedBox(height: 8),
+                    Text(point.description!, style: textTheme.bodyMedium?.copyWith(color: Colors.grey[700])),
+                    const SizedBox(height: 24),
+                  ],
+                  _buildInfoTile(context, icon: Icons.location_on_outlined, title: 'Address', subtitle: point.address ?? 'Not available'),
+                  const SizedBox(height: 12),
+                  _buildInfoTile(context, icon: Icons.directions_walk, title: 'Distance', subtitle: '${calculateDistance(_currentPosition, LatLng(point.latitude, point.longitude)).toStringAsFixed(2)} km away'),
+                  const SizedBox(height: 32),
+                  ElevatedButton.icon(
+                    icon: const Icon(Icons.directions),
+                    label: const Text('Get Directions'),
+                    style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), textStyle: textTheme.titleMedium, shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+                    onPressed: () async {
+                      final url = 'https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}';
+                      if (await canLaunchUrl(Uri.parse(url))) {
+                        await launchUrl(Uri.parse(url));
+                      }
+                    },
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _buildInfoTile(BuildContext context, {required IconData icon, required String title, required String subtitle}) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final textTheme = Theme.of(context).textTheme;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, color: colorScheme.secondary, size: 24),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(title, style: textTheme.bodyLarge),
+              const SizedBox(height: 2),
+              Text(subtitle, style: textTheme.bodyMedium?.copyWith(color: Colors.grey[600])),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
   void _showFilterDialog() {
     showModalBottomSheet(
       context: context,
@@ -202,31 +327,22 @@ class _MapScreenState extends State<MapScreen> {
             return Container(
               padding: const EdgeInsets.all(16),
               child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Filter by Category',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
+                  Text('Filter by Category', style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 16),
                   Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                    spacing: 8, runSpacing: 8,
                     children: _categories.map((category) {
                       final isSelected = _selectedCategoryIds.contains(category.id);
                       return FilterChip(
-                        label: Text(category.name),
-                        selected: isSelected,
+                        label: Text(category.name), selected: isSelected,
                         onSelected: (selected) {
                           setModalState(() {
-                            if (selected) {
-                              _selectedCategoryIds.add(category.id);
-                            } else {
-                              _selectedCategoryIds.remove(category.id);
-                            }
+                            if (selected) { _selectedCategoryIds.add(category.id); }
+                            else { _selectedCategoryIds.remove(category.id); }
                           });
-                          setState(() {}); // Updates the main screen
+                          setState(() {});
                         },
                       );
                     }).toList(),
@@ -235,23 +351,9 @@ class _MapScreenState extends State<MapScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      TextButton(
-                        onPressed: () {
-                          setModalState(() {
-                            _selectedCategoryIds.clear();
-                          });
-                          setState(() {}); // Updates the main screen
-                        },
-                        child: const Text('Clear All'),
-                      ),
+                      TextButton(onPressed: () { setModalState(() { _selectedCategoryIds.clear(); }); setState(() {}); }, child: const Text('Clear All')),
                       const SizedBox(width: 8),
-                      ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          _loadNearbyPoints(); // Reloads with filters applied
-                        },
-                        child: const Text('Apply'),
-                      ),
+                      ElevatedButton(onPressed: () { Navigator.pop(context); _loadNearbyPoints(); }, child: const Text('Apply')),
                     ],
                   ),
                 ],
@@ -263,7 +365,6 @@ class _MapScreenState extends State<MapScreen> {
     );
   }
 
-  // Method to show radius selector
   void _showRadiusSelector() {
     showModalBottomSheet(
       context: context,
@@ -273,50 +374,23 @@ class _MapScreenState extends State<MapScreen> {
             return Container(
               padding: const EdgeInsets.all(16),
               child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    'Search Radius',
-                    style: Theme.of(context).textTheme.titleLarge,
-                  ),
+                  Text('Search Radius', style: Theme.of(context).textTheme.titleLarge),
                   const SizedBox(height: 16),
-                  Text(
-                    '${(_searchRadius / 1000).toStringAsFixed(1)} km',
-                    style: Theme.of(context).textTheme.titleMedium,
-                    textAlign: TextAlign.center,
-                  ),
+                  Text('${(_searchRadius / 1000).toStringAsFixed(1)} km', style: Theme.of(context).textTheme.titleMedium, textAlign: TextAlign.center),
                   Slider(
-                    value: _searchRadius,
-                    min: 500,
-                    max: 5000,
-                    divisions: 9,
+                    value: _searchRadius, min: 500, max: 5000, divisions: 9,
                     label: '${(_searchRadius / 1000).toStringAsFixed(1)} km',
-                    onChanged: (value) {
-                      setModalState(() {
-                        _searchRadius = value;
-                      });
-                    },
+                    onChanged: (value) { setModalState(() { _searchRadius = value; }); },
                   ),
                   const SizedBox(height: 16),
                   Row(
                     mainAxisAlignment: MainAxisAlignment.end,
                     children: [
-                      TextButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                        },
-                        child: const Text('Cancel'),
-                      ),
+                      TextButton(onPressed: () { Navigator.pop(context); }, child: const Text('Cancel')),
                       const SizedBox(width: 8),
-                      ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                          setState(() {}); // Updates the main screen
-                          _loadNearbyPoints(); // Reloads with new radius
-                        },
-                        child: const Text('Apply'),
-                      ),
+                      ElevatedButton(onPressed: () { Navigator.pop(context); setState(() {}); _loadNearbyPoints(); }, child: const Text('Apply')),
                     ],
                   ),
                 ],
@@ -327,583 +401,17 @@ class _MapScreenState extends State<MapScreen> {
       },
     );
   }
+}
 
-  // Helper method for category icons
-  IconData _getCategoryIcon(Category? category) {
-    if (category == null) return Icons.location_on;
-
-    // Map category names to appropriate icons
-    switch(category.name.toLowerCase()) {
-      case 'restaurant':
-      case 'food':
-      case 'dining':
-        return Icons.restaurant;
-      case 'cafe':
-      case 'coffee':
-        return Icons.coffee;
-      case 'shopping':
-      case 'store':
-      case 'mall':
-        return Icons.shopping_bag;
-      case 'hotel':
-      case 'lodging':
-        return Icons.hotel;
-      case 'attraction':
-      case 'tourism':
-        return Icons.attractions;
-      case 'park':
-      case 'nature':
-        return Icons.park;
-      case 'transport':
-      case 'station':
-      case 'bus':
-      case 'train':
-        return Icons.directions_transit;
-      default:
-        return Icons.place;
-    }
-  }
-
-  // Helper method for action buttons
-  Widget _actionButton(BuildContext context, {required IconData icon, required String label, required VoidCallback onTap}) {
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(12),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(
-              icon,
-              color: Theme.of(context).colorScheme.primary,
-            ),
-            const SizedBox(height: 4),
-            Text(
-              label,
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.primary,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('ESME Maps'),
-        centerTitle: false,
-        scrolledUnderElevation: 0,
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.explore),
-            onPressed: _showWhatsAroundMe,
-            tooltip: "What's Around Me",
-          ),
-          IconButton(
-            icon: const Icon(Icons.refresh),
-            onPressed: _loadData,
-            tooltip: 'Refresh',
-          ),
-          IconButton(
-            icon: const Icon(Icons.near_me),
-            onPressed: _loadNearbyPoints,
-            tooltip: 'Load nearby points',
-          ),
-          IconButton(
-            icon: const Icon(Icons.layers),
-            onPressed: _changeMapStyle,
-            tooltip: 'Change map style',
-          ),
-          IconButton(
-            icon: const Icon(Icons.filter_list),
-            onPressed: _showFilterDialog,
-            tooltip: 'Filter by category',
-          ),
-          IconButton(
-            icon: const Icon(Icons.radar),
-            onPressed: _showRadiusSelector,
-            tooltip: 'Set search radius',
-          ),
-          IconButton(
-            icon: const Icon(Icons.search),
-            onPressed: () async {
-              final result = await Navigator.push(
-                context,
-                MaterialPageRoute(builder: (context) => const SearchScreen()),
-              );
-              if (result != null && result is PointOfInterest) {
-                setState(() {
-                  _mapController.move(
-                    LatLng(result.latitude, result.longitude),
-                    15.0,
-                  );
-                });
-              }
-            },
-            tooltip: 'Search',
-          ),
-        ],
-        bottom: _isLoading ? PreferredSize(
-          preferredSize: const Size.fromHeight(4.0),
-          child: LinearProgressIndicator(
-            backgroundColor: Colors.transparent,
-          ),
-        ) : null,
-      ),
-      body: Stack(
-        children: [
-          _errorMessage != null
-              ? Center(child: Text(_errorMessage!, style: TextStyle(color: Colors.red)))
-              : FlutterMap(
-                  mapController: _mapController,
-                  options: MapOptions(
-                    initialCenter: _currentPosition,
-                    initialZoom: 13.0,
-                    onMapReady: () {
-                      setState(() {
-                        _isMapInitialized = true;
-                      });
-                      _moveMapToCurrentPosition();
-                    },
-                  ),
-                  children: [
-                    TileLayer(
-                      urlTemplate: _mapStyles[_currentMapStyleIndex]['url'],
-                      additionalOptions: const {
-                        'attribution': '&copy; OpenStreetMap contributors',
-                      },
-                      // The stackTrace parameter
-                      errorTileCallback: (tile, error, stackTrace) {
-                        print('Error loading tile: $error');
-                        if (stackTrace != null) {
-                          print('Stack trace: $stackTrace');
-                        }
-                      },
-                    ),
-                    MarkerLayer(
-                      markers: [
-                        // Current location marker
-                        Marker(
-                          width: 40.0,
-                          height: 40.0,
-                          point: _currentPosition,
-                          child: const Icon(
-                            Icons.my_location,
-                            color: Colors.blue,
-                            size: 40.0,
-                          ),
-                        ),
-                        // Points of interest markers
-                        ..._points.map((point) => Marker(
-                          width: 50.0,
-                          height: 50.0,
-                          point: LatLng(point.latitude, point.longitude),
-                          child: GestureDetector(
-                            onTap: () => _showPointDetails(point),
-                            child: Column(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.all(4),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context).colorScheme.primary,
-                                    shape: BoxShape.circle,
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.2),
-                                        blurRadius: 6,
-                                        offset: const Offset(0, 3),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Icon(
-                                    _getCategoryIcon(point.category),
-                                    color: Theme.of(context).colorScheme.onPrimary,
-                                    size: 20,
-                                  ),
-                                ),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-                                  decoration: BoxDecoration(
-                                    color: Theme.of(context).colorScheme.surface.withOpacity(0.8),
-                                    borderRadius: BorderRadius.circular(4),
-                                    boxShadow: [
-                                      BoxShadow(
-                                        color: Colors.black.withOpacity(0.1),
-                                        blurRadius: 2,
-                                        offset: const Offset(0, 1),
-                                      ),
-                                    ],
-                                  ),
-                                  child: Text(
-                                    point.name,
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.bold,
-                                      color: Theme.of(context).colorScheme.onSurface,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        )),
-                      ],
-                    ),
-                  ],
-                ),
-          if (_isLoading)
-            Container(
-              color: Colors.black.withOpacity(0.3),
-              child: Center(
-                child: Card(
-                  elevation: 4,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                  child: Padding(
-                    padding: const EdgeInsets.all(20),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const CircularProgressIndicator(),
-                        const SizedBox(height: 16),
-                        Text(
-                          'Loading map data...',
-                          style: Theme.of(context).textTheme.titleMedium,
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-            ),
-        ],
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _getCurrentLocation,
-        child: const Icon(Icons.my_location),
-      ),
-    );
-  }
-
-  void _showPointDetails(PointOfInterest point) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (context) {
-        return DraggableScrollableSheet(
-          initialChildSize: 0.4,
-          minChildSize: 0.2,
-          maxChildSize: 0.8,
-          builder: (_, controller) {
-            return Container(
-              decoration: BoxDecoration(
-                color: Theme.of(context).colorScheme.surface,
-                borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.2),
-                    blurRadius: 10,
-                    offset: const Offset(0, -2),
-                  ),
-                ],
-              ),
-              child: ListView(
-                controller: controller,
-                padding: const EdgeInsets.all(20),
-                children: [
-                  // Handles for dragging
-                  Center(
-                    child: Container(
-                      width: 40,
-                      height: 5,
-                      margin: const EdgeInsets.only(bottom: 20),
-                      decoration: BoxDecoration(
-                        color: Colors.grey.withOpacity(0.5),
-                        borderRadius: BorderRadius.circular(2.5),
-                      ),
-                    ),
-                  ),
-                  // Hero image placeholder
-                  Container(
-                    height: 150,
-                    margin: const EdgeInsets.only(bottom: 20),
-                    decoration: BoxDecoration(
-                      color: Theme.of(context).colorScheme.primaryContainer,
-                      borderRadius: BorderRadius.circular(12),
-                      image: const DecorationImage(
-                        image: NetworkImage('https://via.placeholder.com/400x200?text=No+Image'),
-                        fit: BoxFit.cover,
-                      ),
-                    ),
-                    child: Stack(
-                      children: [
-                        Positioned(
-                          top: 12,
-                          right: 12,
-                          child: Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                            decoration: BoxDecoration(
-                              color: Theme.of(context).colorScheme.primary,
-                              borderRadius: BorderRadius.circular(20),
-                            ),
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Icon(
-                                  Icons.star,
-                                  color: Theme.of(context).colorScheme.onPrimary,
-                                  size: 16,
-                                ),
-                                const SizedBox(width: 4),
-                                Text(
-                                  '4.5', // Placeholder rating
-                                  style: TextStyle(
-                                    color: Theme.of(context).colorScheme.onPrimary,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  // Title and category
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(
-                          _getCategoryIcon(point.category),
-                          color: Theme.of(context).colorScheme.onPrimaryContainer,
-                          size: 28,
-                        ),
-                      ),
-                      const SizedBox(width: 16),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              point.name,
-                              style: Theme.of(context).textTheme.titleLarge?.copyWith(
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                            if (point.category != null)
-                              Chip(
-                                label: Text(point.category!.name),
-                                backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
-                                labelStyle: TextStyle(
-                                  color: Theme.of(context).colorScheme.onSecondaryContainer,
-                                ),
-                                padding: EdgeInsets.zero,
-                                materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
-                              ),
-                          ],
-                        ),
-                      ),
-                    ],
-                  ),
-                  const Divider(height: 32),
-                  // Description
-                  if (point.description != null && point.description!.isNotEmpty) ...[                    
-                    Text(
-                      point.description!,
-                      style: Theme.of(context).textTheme.bodyMedium,
-                    ),
-                    const SizedBox(height: 16),
-                  ],
-                  // Address with map preview
-                  if (point.address != null && point.address!.isNotEmpty) ...[                    
-                    ListTile(
-                      contentPadding: EdgeInsets.zero,
-                      leading: Icon(
-                        Icons.location_on,
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
-                      title: Text('Address'),
-                      subtitle: Text(point.address!),
-                    ),
-                    // Mini map preview
-                    Container(
-                      height: 120,
-                      margin: const EdgeInsets.symmetric(vertical: 16),
-                      decoration: BoxDecoration(
-                        borderRadius: BorderRadius.circular(12),
-                        border: Border.all(color: Colors.grey.withOpacity(0.3)),
-                      ),
-                      child: ClipRRect(
-                        borderRadius: BorderRadius.circular(12),
-                        child: FlutterMap(
-                          options: MapOptions(
-                            initialCenter: LatLng(point.latitude, point.longitude),
-                            initialZoom: 14.0,
-                            interactionOptions: const InteractionOptions(
-                              flags: InteractiveFlag.none,
-                            ),
-                          ),
-                          children: [
-                            TileLayer(
-                              urlTemplate: _mapStyles.firstWhere(
-                                (style) => style['id'] == _currentMapStyleId,
-                                orElse: () => {'url': 'https://tile.openstreetmap.org/{z}/{x}/{y}.png'},
-                              )['url'],
-                            ),
-                            MarkerLayer(
-                              markers: [
-                                Marker(
-                                  width: 40.0,
-                                  height: 40.0,
-                                  point: LatLng(point.latitude, point.longitude),
-                                  child: Icon(
-                                    _getCategoryIcon(point.category),
-                                    color: Theme.of(context).colorScheme.primary,
-                                    size: 30.0,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ],
-                  // Action buttons
-                  Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _actionButton(
-                        context,
-                        icon: Icons.directions,
-                        label: 'Directions',
-                        onTap: () {
-                          // Opens maps app with directions
-                          final url = 'https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}';
-                          // Need to implement url_launcher package
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Opening directions (URL launcher not implemented)'))
-                          );
-                        },
-                      ),
-                      _actionButton(
-                        context,
-                        icon: Icons.share,
-                        label: 'Share',
-                        onTap: () {
-                          // Share location
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Sharing feature coming soon!'))
-                          );
-                        },
-                      ),
-                      _actionButton(
-                        context,
-                        icon: Icons.star_border,
-                        label: 'Save',
-                        onTap: () {
-                          // Save to favorites
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Saved to favorites (feature coming soon)'))
-                          );
-                        },
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  void _showWhatsAroundMe() {
-    if (_categories.isEmpty) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Loading categories...'))
-      );
-      return;
-    }
-    
-    showModalBottomSheet(
-      context: context,
-      builder: (context) {
-        return Container(
-          padding: const EdgeInsets.all(16),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                "What's Around Me?",
-                style: Theme.of(context).textTheme.titleLarge,
-              ),
-              const SizedBox(height: 16),
-              Text(
-                "Discover places near your current location",
-                style: Theme.of(context).textTheme.bodyMedium,
-              ),
-              const SizedBox(height: 16),
-              Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: _categories.map((category) {
-                  return InkWell(
-                    onTap: () {
-                      Navigator.pop(context);
-                      setState(() {
-                        _selectedCategoryIds.clear();
-                        _selectedCategoryIds.add(category.id);
-                      });
-                      _loadNearbyPoints();
-                    },
-                    borderRadius: BorderRadius.circular(12),
-                    child: Container(
-                      width: 80,
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.surfaceVariant,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Icon(
-                            _getCategoryIcon(category),
-                            color: Theme.of(context).colorScheme.primary,
-                            size: 32,
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            category.name,
-                            style: Theme.of(context).textTheme.bodySmall,
-                            textAlign: TextAlign.center,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                        ],
-                      ),
-                    ),
-                  );
-                }).toList(),
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
+double calculateDistance(LatLng point1, LatLng point2) {
+  const double earthRadius = 6371;
+  final double lat1 = point1.latitude * (pi / 180);
+  final double lon1 = point1.longitude * (pi / 180);
+  final double lat2 = point2.latitude * (pi / 180);
+  final double lon2 = point2.longitude * (pi / 180);
+  final double dLat = lat2 - lat1;
+  final double dLon = lon2 - lon1;
+  final double a = sin(dLat / 2) * sin(dLat / 2) + cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2);
+  final double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+  return earthRadius * c;
 }
