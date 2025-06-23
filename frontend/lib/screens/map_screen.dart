@@ -3,6 +3,8 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
 import 'dart:math';
 
 import '../models/point_of_interest.dart';
@@ -43,6 +45,8 @@ class _MapScreenState extends State<MapScreen> {
   Set<int> _selectedCategoryIds = {};
   double _searchRadius = 1000;
 
+  LatLng? _tappedPoint;
+
   @override
   void initState() {
     super.initState();
@@ -55,6 +59,40 @@ class _MapScreenState extends State<MapScreen> {
     await _loadCategories();
   }
 
+  Future<void> _handleMapLongPress(LatLng tappedPoint) async {
+    setState(() {
+      _tappedPoint = tappedPoint;
+    });
+
+    try {
+      final url = Uri.parse(
+        'https://nominatim.openstreetmap.org/reverse?format=json&lat=${tappedPoint.latitude}&lon=${tappedPoint.longitude}'
+      );
+      final response = await http.get(url, headers: {'User-Agent': 'ESME Maps App'});
+
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final String address = data['display_name'] ?? 'No address found';
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(address),
+            action: SnackBarAction(
+              label: 'Clear',
+              onPressed: () => setState(() => _tappedPoint = null),
+            ),
+          ),
+        );
+      } else {
+        throw Exception('Failed to fetch address');
+      }
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text("Could not find address for this location.")),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final currentMapStyle = _mapStyles[_currentMapStyleIndex];
@@ -62,7 +100,7 @@ class _MapScreenState extends State<MapScreen> {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('ESMĖ Maps'),
+        title: const Text('ESME Maps'),
         elevation: 0,
         backgroundColor: Colors.transparent,
         actions: [
@@ -92,6 +130,7 @@ class _MapScreenState extends State<MapScreen> {
               initialZoom: 13.0,
               minZoom: 5.0,
               maxZoom: 18.0,
+              onLongPress: (tapPosition, point) => _handleMapLongPress(point),
             ),
             children: [
               TileLayer(
@@ -120,6 +159,17 @@ class _MapScreenState extends State<MapScreen> {
                       ),
                     ),
                   )),
+                  if (_tappedPoint != null)
+                    Marker(
+                      width: 80.0,
+                      height: 80.0,
+                      point: _tappedPoint!,
+                      child: const Icon(
+                        Icons.location_pin,
+                        size: 50.0,
+                        color: Colors.redAccent,
+                      ),
+                    ),
                   Marker(width: 40.0, height: 40.0, point: _currentPosition, child: const Icon(Icons.my_location, color: Colors.blueAccent, size: 35.0)),
                 ],
               ),
