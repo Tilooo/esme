@@ -13,6 +13,7 @@ import '../models/point_of_interest.dart';
 import '../models/category.dart';
 import '../services/api_service.dart';
 import 'search_screen.dart';
+import 'package:frontend/widgets/pulsing_marker.dart';
 
 class MapStyle {
   final String name;
@@ -247,7 +248,7 @@ class _MapScreenState extends State<MapScreen> {
                       point: _tappedPoint!,
                       child: const Icon(Icons.location_pin, size: 50.0, color: Colors.redAccent),
                     ),
-                  Marker(width: 40.0, height: 40.0, point: _currentPosition, child: const Icon(Icons.my_location, color: Colors.blueAccent, size: 35.0)),
+                  Marker(width: 40.0, height: 40.0, point: _currentPosition, child: const PulsingMarker()),
                 ],
               ),
             ],
