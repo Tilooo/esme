@@ -9,11 +9,11 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:frontend/api_secrets.dart';
+import 'package:frontend/widgets/pulsing_marker.dart';
 import '../models/point_of_interest.dart';
 import '../models/category.dart';
 import '../services/api_service.dart';
 import 'search_screen.dart';
-import 'package:frontend/widgets/pulsing_marker.dart';
 
 class MapStyle {
   final String name;
@@ -21,6 +21,9 @@ class MapStyle {
   final String attribution;
   const MapStyle({required this.name, required this.url, required this.attribution});
 }
+
+// --- NEW: A clean way to define our travel modes ---
+enum TravelMode { driving, cycling, walking }
 
 class MapScreen extends StatefulWidget {
   const MapScreen({Key? key}) : super(key: key);
@@ -50,6 +53,8 @@ class _MapScreenState extends State<MapScreen> {
 
   LatLng? _tappedPoint;
   List<LatLng> _routePoints = [];
+  Color _routeColor = Colors.deepPurple;
+  TravelMode _selectedTravelMode = TravelMode.driving;
 
   @override
   void initState() {
@@ -66,16 +71,29 @@ class _MapScreenState extends State<MapScreen> {
   Future<void> _getRoute(LatLng destination) async {
     setState(() { _isLoading = true; });
 
-    final start = _currentPosition;
-    final end = destination;
+    String modeString;
+    Color newRouteColor;
+    switch (_selectedTravelMode) {
+      case TravelMode.cycling:
+        modeString = 'cycling-regular';
+        newRouteColor = Colors.green;
+        break;
+      case TravelMode.walking:
+        modeString = 'foot-walking';
+        newRouteColor = Colors.orange;
+        break;
+      default:
+        modeString = 'driving-car';
+        newRouteColor = Colors.deepPurple;
+    }
 
-    final url = 'https://api.openrouteservice.org/v2/directions/driving-car/geojson';
+    final url = 'https://api.openrouteservice.org/v2/directions/$modeString/geojson';
     final headers = {
       'Authorization': orsApiKey,
       'Content-Type': 'application/json',
     };
     final body = jsonEncode({
-      'coordinates': [[start.longitude, start.latitude], [end.longitude, end.latitude]]
+      'coordinates': [[_currentPosition.longitude, _currentPosition.latitude], [destination.longitude, destination.latitude]]
     });
 
     try {
@@ -83,24 +101,22 @@ class _MapScreenState extends State<MapScreen> {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
-        final List<dynamic> coords = data['features'][0]['geometry']['coordinates'];
-
+        final coords = data['features'][0]['geometry']['coordinates'] as List;
         final summary = data['features'][0]['properties']['summary'];
         final double distanceInKm = summary['distance'] / 1000;
         final double durationInMinutes = summary['duration'] / 60;
-
-        final routePoints = coords.map((coord) => LatLng(coord[1], coord[0])).toList();
+        final routePoints = coords.map((coord) => LatLng(coord[1].toDouble(), coord[0].toDouble())).toList();
 
         if (!mounted) return;
         setState(() {
           _routePoints = routePoints;
+          _routeColor = newRouteColor;
           _isLoading = false;
         });
 
-        final bounds = LatLngBounds.fromPoints(_routePoints);
         _mapController.fitCamera(
           CameraFit.bounds(
-            bounds: bounds,
+            bounds: LatLngBounds.fromPoints(routePoints),
             padding: const EdgeInsets.all(50.0),
           ),
         );
@@ -108,7 +124,7 @@ class _MapScreenState extends State<MapScreen> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text(
-              'Distance: ${distanceInKm.toStringAsFixed(1)} km, Time: ${durationInMinutes.toStringAsFixed(0)} mins'
+              '${_selectedTravelMode.name.capitalize()} route: ${distanceInKm.toStringAsFixed(1)} km, ${durationInMinutes.toStringAsFixed(0)} mins'
             ),
             duration: const Duration(seconds: 5),
           ),
@@ -215,7 +231,7 @@ class _MapScreenState extends State<MapScreen> {
                   polylines: [
                     Polyline(
                       points: _routePoints,
-                      color: Colors.deepPurple,
+                      color: _routeColor,
                       strokeWidth: 5,
                     ),
                   ],
@@ -281,97 +297,127 @@ class _MapScreenState extends State<MapScreen> {
   }
 
   void _showPointDetails(PointOfInterest point) {
-    showModalBottomSheet(
-      context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
-      builder: (context) {
-        final colorScheme = Theme.of(context).colorScheme;
-        final textTheme = Theme.of(context).textTheme;
-        return DraggableScrollableSheet(
-          initialChildSize: 0.55,
-          minChildSize: 0.2,
-          maxChildSize: 0.85,
-          builder: (_, controller) {
-            return Container(
-              decoration: BoxDecoration(color: colorScheme.surface, borderRadius: const BorderRadius.vertical(top: Radius.circular(24))),
-              child: Column(
-                children: [
-                  Expanded(
-                    child: ListView(
-                      controller: controller,
-                      padding: const EdgeInsets.symmetric(horizontal: 24),
-                      children: [
-                        Center(child: Container(width: 40, height: 5, margin: const EdgeInsets.symmetric(vertical: 12), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10)))),
-                        Row(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Icon(_getCategoryIcon(point.category), color: colorScheme.primary, size: 40),
-                            const SizedBox(width: 16),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(point.name, style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
-                                  if (point.category != null) Padding(padding: const EdgeInsets.only(top: 4.0), child: Text(point.category!.name, style: textTheme.bodyLarge?.copyWith(color: colorScheme.secondary))),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const Divider(height: 40),
-                        if (point.description != null && point.description!.isNotEmpty) ...[
-                          Text("About", style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
-                          const SizedBox(height: 8),
-                          Text(point.description!, style: textTheme.bodyMedium?.copyWith(color: Colors.grey[700])),
-                          const SizedBox(height: 24),
-                        ],
-                        _buildInfoTile(context, icon: Icons.location_on_outlined, title: 'Address', subtitle: point.address ?? 'Not available'),
-                        const SizedBox(height: 12),
-                        _buildInfoTile(context, icon: Icons.directions_walk, title: 'Distance', subtitle: '${calculateDistance(_currentPosition, LatLng(point.latitude, point.longitude)).toStringAsFixed(2)} km away'),
-                      ],
-                    ),
-                  ),
-                  Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Row(
-                      children: [
-                        Expanded(
-                          child: ElevatedButton.icon(
-                            icon: const Icon(Icons.route),
-                            label: const Text('Show Route'),
-                            style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), backgroundColor: colorScheme.secondary, foregroundColor: colorScheme.onSecondary),
-                            onPressed: () {
-                              Navigator.pop(context);
-                              _getRoute(LatLng(point.latitude, point.longitude));
-                            },
-                          ),
-                        ),
-                        const SizedBox(width: 16),
-                        Expanded(
-                          child: OutlinedButton.icon(
-                            icon: const Icon(Icons.map),
-                            label: const Text('Open Maps'),
-                            style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
-                            onPressed: () async {
-                              final url = 'https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}';
-                              if (await canLaunchUrl(Uri.parse(url))) {
-                                await launchUrl(Uri.parse(url));
-                              }
-                            },
-                          ),
-                        )
-                      ],
-                    ),
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
+  showModalBottomSheet(
+    context: context, isScrollControlled: true, backgroundColor: Colors.transparent,
+    builder: (context) {
+      final colorScheme = Theme.of(context).colorScheme;
+      final textTheme = Theme.of(context).textTheme;
 
-  // --- Other methods  ---
+      return StatefulBuilder(
+        builder: (BuildContext context, StateSetter setModalState) {
+          return DraggableScrollableSheet(
+            // It need it to be a bit taller to fit all the pinned controls
+            initialChildSize: 0.65,
+            minChildSize: 0.3,
+            maxChildSize: 0.85,
+            builder: (_, controller) {
+              return Container(
+                decoration: BoxDecoration(color: colorScheme.surface, borderRadius: const BorderRadius.vertical(top: Radius.circular(24))),
+                child: Column(
+                  children: [
+                    // --- Part 1: The SCROLLABLE content ---
+                    Expanded(
+                      child: ListView(
+                        controller: controller,
+                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        children: [
+                          Center(child: Container(width: 40, height: 5, margin: const EdgeInsets.symmetric(vertical: 12), decoration: BoxDecoration(color: Colors.grey[300], borderRadius: BorderRadius.circular(10)))),
+                          Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(_getCategoryIcon(point.category), color: colorScheme.primary, size: 40),
+                              const SizedBox(width: 16),
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(point.name, style: textTheme.headlineSmall?.copyWith(fontWeight: FontWeight.bold)),
+                                    if (point.category != null) Padding(padding: const EdgeInsets.only(top: 4.0), child: Text(point.category!.name, style: textTheme.bodyLarge?.copyWith(color: colorScheme.secondary))),
+                                  ],
+                                ),
+                              ),
+                            ],
+                          ),
+                          const Divider(height: 40),
+                          if (point.description != null && point.description!.isNotEmpty) ...[
+                            Text("About", style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 8),
+                            Text(point.description!, style: textTheme.bodyMedium?.copyWith(color: Colors.grey[700])),
+                            const SizedBox(height: 24),
+                          ],
+                          _buildInfoTile(context, icon: Icons.location_on_outlined, title: 'Address', subtitle: point.address ?? 'Not available'),
+                          const SizedBox(height: 12),
+                          _buildInfoTile(context, icon: Icons.directions_walk, title: 'Distance', subtitle: '${calculateDistance(_currentPosition, LatLng(point.latitude, point.longitude)).toStringAsFixed(2)} km away'),
+                        ],
+                      ),
+                    ),
+
+                    // --- Part 2: PINNED Travel Mode Selector ---
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                      child: SegmentedButton<TravelMode>(
+                        segments: const <ButtonSegment<TravelMode>>[
+                          ButtonSegment<TravelMode>(value: TravelMode.driving, label: Text('Car'), icon: Icon(Icons.directions_car)),
+                          ButtonSegment<TravelMode>(value: TravelMode.cycling, label: Text('Bike'), icon: Icon(Icons.directions_bike)),
+                          ButtonSegment<TravelMode>(value: TravelMode.walking, label: Text('Walk'), icon: Icon(Icons.directions_walk)),
+                        ],
+                        selected: {_selectedTravelMode},
+                        onSelectionChanged: (Set<TravelMode> newSelection) {
+                          setModalState(() {
+                            _selectedTravelMode = newSelection.first;
+                          });
+                          setState(() {
+                            _selectedTravelMode = newSelection.first;
+                          });
+                        },
+                      ),
+                    ),
+
+                    // --- Part 3: PINNED Action Buttons ---
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: ElevatedButton.icon(
+                              icon: const Icon(Icons.route),
+                              label: const Text('Show Route'),
+                              style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16), backgroundColor: colorScheme.secondary, foregroundColor: colorScheme.onSecondary),
+                              onPressed: () {
+                                Navigator.pop(context);
+                                _getRoute(LatLng(point.latitude, point.longitude));
+                              },
+                            ),
+                          ),
+                          const SizedBox(width: 16),
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              icon: const Icon(Icons.map),
+                              label: const Text('Open Maps'),
+                              style: OutlinedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                              onPressed: () async {
+                                final url = 'https://www.google.com/maps/dir/?api=1&destination=${point.latitude},${point.longitude}';
+                                if (await canLaunchUrl(Uri.parse(url))) {
+                                  await launchUrl(Uri.parse(url));
+                                }
+                              },
+                            ),
+                          )
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      );
+    },
+  );
+}
+
+  // --- All other methods are unchanged ---
   void _changeMapStyle() { setState(() { _currentMapStyleIndex = (_currentMapStyleIndex + 1) % _mapStyles.length; }); ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Map style: ${_mapStyles[_currentMapStyleIndex].name}'))); }
   Future<void> _loadCategories() async { try { final categories = await _apiService.getCategories(); if (!mounted) return; setState(() { _categories = categories; }); } catch (e) { print('Error loading categories: $e'); } }
   Future<void> _loadNearbyPoints() async { setState(() { _isLoading = true; _errorMessage = null; }); try { final points = await _apiService.getNearbyPoints(_currentPosition.latitude, _currentPosition.longitude, _searchRadius); final filteredPoints = _selectedCategoryIds.isEmpty ? points : points.where((p) => p.category != null && _selectedCategoryIds.contains(p.category!.id)).toList(); if (!mounted) return; setState(() { _points = filteredPoints; _isLoading = false; _errorMessage = _points.isEmpty ? 'No nearby points found.' : null; }); } catch (e) { if (!mounted) return; setState(() { _isLoading = false; _errorMessage = 'Error loading nearby points: $e'; }); } }
@@ -383,3 +429,9 @@ class _MapScreenState extends State<MapScreen> {
 }
 
 double calculateDistance(LatLng point1, LatLng point2) { const double earthRadius = 6371; final double lat1 = point1.latitude * (pi / 180); final double lon1 = point1.longitude * (pi / 180); final double lat2 = point2.latitude * (pi / 180); final double lon2 = point2.longitude * (pi / 180); final double dLat = lat2 - lat1; final double dLon = lon2 - lon1; final double a = sin(dLat / 2) * sin(dLat / 2) + cos(lat1) * cos(lat2) * sin(dLon / 2) * sin(dLon / 2); final double c = 2 * atan2(sqrt(a), sqrt(1 - a)); return earthRadius * c; }
+
+extension StringExtension on String {
+    String capitalize() {
+      return "${this[0].toUpperCase()}${this.substring(1)}";
+    }
+}
