@@ -4,10 +4,12 @@ ESME Maps is a full-stack mapping application that allows users to discover and 
 ## Features
 - Interactive Map: Browse points of interest on an interactive map with multiple map style options
 - Location Services: Find nearby points of interest based on your current location
-- Category Filtering: Filter points by categories to find exactly what you're looking for
+- Dynamic Filtering: Users can filter points by category and search radius
+- Live Routing: You can calculate and display routes for driving, walking, and cycling, complete with different colors
+- Smart UX: The map automatically zooms to fit the route, and trip info is displayed
 - Search Functionality: Search for specific points of interest by name or description
 - Detailed Information: View comprehensive details about each point, including description, address, and distance from your location
-- Responsive Design: Modern Material 3 UI that adapts to both light and dark themes
+- Responsive Design: Modern Material 3 UI that adapts to both light and dark themes, with zoom controls and a beautiful, pulsing live location marker
 ## Technology Stack
 ### Frontend
 - Flutter: Cross-platform UI framework for building mobile applications
